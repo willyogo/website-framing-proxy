@@ -216,6 +216,10 @@ export class ProxyServer {
       res.removeHeader('content-security-policy');
       res.removeHeader('content-security-policy-report-only');
       
+      // Remove compression headers since we'll decompress and send uncompressed content
+      res.removeHeader('content-encoding');
+      res.removeHeader('content-length');
+      
       // Set CORS headers
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -235,63 +239,66 @@ export class ProxyServer {
       // Process content if it's HTML
       const contentType = proxyRes.headers['content-type'] || '';
       if (contentType.includes('text/html')) {
-        // Check if content is compressed
-        const contentEncoding = proxyRes.headers['content-encoding'];
-        const isCompressed = contentEncoding === 'gzip' || contentEncoding === 'deflate';
+        // For HTML content, always process it to add URL rewriting and JS injection
+        const chunks: Buffer[] = [];
+        proxyRes.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
         
-        if (isCompressed) {
-          // For compressed content, pipe directly to avoid decompression issues
-          // The browser will handle the decompression
-          proxyRes.pipe(res);
-        } else {
-          // For uncompressed HTML, we can process it
-          const chunks: Buffer[] = [];
-          proxyRes.on('data', (chunk: Buffer) => {
-            chunks.push(chunk);
-          });
-          
-          proxyRes.on('end', async () => {
-            try {
-              // Combine all chunks
-              const buffer = Buffer.concat(chunks);
-              const html = buffer.toString('utf8');
-              
-              // Check if this is actually HTML
-              if (!html.trim().startsWith('<') && !html.includes('<html') && !html.includes('<!DOCTYPE')) {
-                // Not HTML, send as-is
-                res.send(html);
-                return;
-              }
-              
-              // Create rewrite context
-              const proxyBaseUrl = `${req.protocol}://${req.get('host')}`;
-              const context: RewriteContext = {
-                originalUrl: targetUrl.toString(),
-                proxyBaseUrl,
-                targetHost: targetUrl.hostname,
-                targetProtocol: targetUrl.protocol
-              };
-              
-              // Process the HTML content
-              const processedHtml = await this.contentProcessor.processHtmlContent(html, context);
-              
-              // Send the processed content
-              res.send(processedHtml);
-            } catch (error) {
-              this.logger.error('Error processing HTML content:', error as Record<string, any>);
-              // Fallback to original content
-              const buffer = Buffer.concat(chunks);
-              res.send(buffer.toString('utf8'));
+        proxyRes.on('end', async () => {
+          try {
+            // Combine all chunks
+            const buffer = Buffer.concat(chunks);
+            
+            // Check if content is compressed and decompress if necessary
+            const contentEncoding = proxyRes.headers['content-encoding'];
+            let html: string;
+            
+            if (contentEncoding === 'gzip') {
+              const zlib = require('zlib');
+              html = zlib.gunzipSync(buffer).toString('utf8');
+            } else if (contentEncoding === 'deflate') {
+              const zlib = require('zlib');
+              html = zlib.inflateSync(buffer).toString('utf8');
+            } else {
+              html = buffer.toString('utf8');
             }
-          });
-          
-          proxyRes.on('error', (error: any) => {
-            this.logger.error('Error reading proxy response:', error);
-            if (!res.headersSent) {
-              res.status(500).json({ error: 'Error processing response' });
+            
+            // Check if this is actually HTML
+            if (!html.trim().startsWith('<') && !html.includes('<html') && !html.includes('<!DOCTYPE')) {
+              // Not HTML, send as-is
+              res.send(html);
+              return;
             }
-          });
-        }
+            
+            // Create rewrite context
+            const proxyBaseUrl = `${req.protocol}://${req.get('host')}`;
+            const context: RewriteContext = {
+              originalUrl: targetUrl.toString(),
+              proxyBaseUrl,
+              targetHost: targetUrl.hostname,
+              targetProtocol: targetUrl.protocol
+            };
+            
+            // Process the HTML content
+            const processedHtml = await this.contentProcessor.processHtmlContent(html, context);
+            
+            // Send the processed content (uncompressed)
+            res.send(processedHtml);
+          } catch (error) {
+            this.logger.error('Error processing HTML content:', error as Record<string, any>);
+            // Fallback to original content
+            const buffer = Buffer.concat(chunks);
+            res.send(buffer.toString('utf8'));
+          }
+        });
+        
+        proxyRes.on('error', (error: any) => {
+          this.logger.error('Error reading proxy response:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error processing response' });
+          }
+        });
       } else {
         // For non-HTML content, pipe directly
         proxyRes.pipe(res);

@@ -227,6 +227,9 @@ export class ProxyServer {
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
       
+      // Debug header to verify we're running the latest code
+      res.setHeader('X-Proxy-Version', 'streaming-decompression-v1');
+      
       // Process cookies if present
       const setCookieHeaders = proxyRes.headers['set-cookie'];
       if (setCookieHeaders) {

@@ -301,7 +301,7 @@ export class ProxyServer {
           // Pipe the compressed response to the decompressor
           proxyRes.pipe(decompressor);
         } else {
-          // For uncompressed HTML, process normally
+          // For uncompressed HTML, collect data and process
           const chunks: Buffer[] = [];
           proxyRes.on('data', (chunk: Buffer) => {
             chunks.push(chunk);
@@ -309,13 +309,11 @@ export class ProxyServer {
           
           proxyRes.on('end', async () => {
             try {
-              // Combine all chunks
               const buffer = Buffer.concat(chunks);
               const html = buffer.toString('utf8');
               
               // Check if this is actually HTML
               if (!html.trim().startsWith('<') && !html.includes('<html') && !html.includes('<!DOCTYPE')) {
-                // Not HTML, send as-is
                 res.send(html);
                 return;
               }

@@ -14,10 +14,5 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "src/server/proxy-server.ts": {
-      "maxDuration": 30
-    }
   }
 }

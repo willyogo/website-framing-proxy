@@ -2,15 +2,16 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-// import { ContentProcessor } from '../processing/content-processor'; // TODO: Enable in Phase 2
-// import { RewriteContext } from '../processing/url-rewriter'; // TODO: Enable in Phase 2
+import { ContentProcessor, RewriteContext } from '../processing/content-processor';
+import { CookieManager } from '../processing/cookie-manager';
 // import { SubdomainRouter } from './subdomain-router'; // Will be used in Phase 3
 import { Logger, LogLevel } from '../utils/logger';
 
 export class ProxyServer {
   private app: express.Application;
   private port: number;
-  // private contentProcessor: ContentProcessor; // TODO: Enable in Phase 2
+  private contentProcessor: ContentProcessor;
+  private cookieManager: CookieManager;
   // private subdomainRouter: SubdomainRouter; // Will be used in Phase 3
   private logger: Logger;
 
@@ -20,7 +21,10 @@ export class ProxyServer {
     this.logger = new Logger();
     this.logger.setLogLevel(LogLevel.DEBUG);
     
-    // this.contentProcessor = new ContentProcessor(this.logger); // TODO: Enable in Phase 2
+    // Initialize Phase 2 components
+    this.contentProcessor = new ContentProcessor(this.logger);
+    this.cookieManager = new CookieManager(this.logger);
+    
     // this.subdomainRouter = new SubdomainRouter(); // Will be used in Phase 3
     
     this.setupMiddleware();
@@ -155,6 +159,10 @@ export class ProxyServer {
     
     console.log('Making direct request to:', targetUrl.toString());
     
+    // Process request cookies
+    const requestCookies = req.get('Cookie') || '';
+    const processedCookies = this.cookieManager.processRequestCookies(requestCookies, targetUrl.hostname);
+    
     const options: any = {
       hostname: targetUrl.hostname,
       port: targetUrl.port || (isHttps ? 443 : 80),
@@ -172,6 +180,11 @@ export class ProxyServer {
       }
     };
     
+    // Set processed cookies if any
+    if (processedCookies) {
+      options.headers['Cookie'] = processedCookies;
+    }
+    
     // Remove proxy-identifying headers
     delete options.headers['x-forwarded-for'];
     delete options.headers['x-real-ip'];
@@ -179,7 +192,7 @@ export class ProxyServer {
     delete options.headers['x-forwarded-host'];
     delete options.headers['x-forwarded-port'];
     
-    const proxyReq = client.request(options, (proxyRes: any) => {
+    const proxyReq = client.request(options, async (proxyRes: any) => {
       console.log('Direct proxy response received:', proxyRes.statusCode);
       
       // Set response status and headers
@@ -203,8 +216,25 @@ export class ProxyServer {
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
       
-      // Pipe the response
-      proxyRes.pipe(res);
+      // Process cookies if present
+      const setCookieHeaders = proxyRes.headers['set-cookie'];
+      if (setCookieHeaders) {
+        const processedCookies = this.cookieManager.processResponseCookies(
+          setCookieHeaders,
+          targetUrl.hostname,
+          req.get('host') || 'localhost'
+        );
+        res.setHeader('Set-Cookie', processedCookies);
+      }
+      
+      // Process content if it's HTML
+      const contentType = proxyRes.headers['content-type'] || '';
+      if (contentType.includes('text/html')) {
+        await this.processHtmlResponse(proxyRes, res, targetUrl, req);
+      } else {
+        // For non-HTML content, pipe directly
+        proxyRes.pipe(res);
+      }
     });
     
     proxyReq.on('error', (err: any) => {
@@ -230,10 +260,85 @@ export class ProxyServer {
     }
   }
 
-  // TODO: Implement response content processing in Phase 2
-  // private async processProxyResponse(proxyRes: any, req: express.Request, res: express.Response): Promise<void> {
-  //   // Content processing logic will be implemented here
-  // }
+  /**
+   * Process HTML response content with URL rewriting and JavaScript injection
+   */
+  private async processHtmlResponse(
+    proxyRes: any, 
+    res: express.Response, 
+    targetUrl: URL, 
+    req: express.Request
+  ): Promise<void> {
+    try {
+      // Check if content is compressed
+      const contentEncoding = proxyRes.headers['content-encoding'];
+      const isCompressed = contentEncoding === 'gzip' || contentEncoding === 'deflate';
+      
+      // Remove compression headers since we'll decompress and recompress
+      if (isCompressed) {
+        res.removeHeader('content-encoding');
+        res.removeHeader('content-length');
+      }
+      
+      // Collect the response data
+      const chunks: Buffer[] = [];
+      proxyRes.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      
+      proxyRes.on('end', async () => {
+        try {
+          // Combine all chunks
+          const buffer = Buffer.concat(chunks);
+          let html: string;
+          
+          // Decompress if necessary
+          if (isCompressed) {
+            const zlib = require('zlib');
+            if (contentEncoding === 'gzip') {
+              html = zlib.gunzipSync(buffer).toString('utf8');
+            } else if (contentEncoding === 'deflate') {
+              html = zlib.inflateSync(buffer).toString('utf8');
+            } else {
+              html = buffer.toString('utf8');
+            }
+          } else {
+            html = buffer.toString('utf8');
+          }
+          
+          // Create rewrite context
+          const proxyBaseUrl = `${req.protocol}://${req.get('host')}`;
+          const context: RewriteContext = {
+            originalUrl: targetUrl.toString(),
+            proxyBaseUrl,
+            targetHost: targetUrl.hostname,
+            targetProtocol: targetUrl.protocol
+          };
+          
+          // Process the HTML content
+          const processedHtml = await this.contentProcessor.processHtmlContent(html, context);
+          
+          // Send the processed content
+          res.send(processedHtml);
+        } catch (error) {
+          this.logger.error('Error processing HTML content:', error as Record<string, any>);
+          // Fallback to direct piping
+          proxyRes.pipe(res);
+        }
+      });
+      
+      proxyRes.on('error', (error: any) => {
+        this.logger.error('Error reading proxy response:', error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Error processing response' });
+        }
+      });
+    } catch (error) {
+      this.logger.error('Error in processHtmlResponse:', error as Record<string, any>);
+      // Fallback to direct piping
+      proxyRes.pipe(res);
+    }
+  }
 
 
 

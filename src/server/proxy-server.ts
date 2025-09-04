@@ -239,73 +239,59 @@ export class ProxyServer {
         const contentEncoding = proxyRes.headers['content-encoding'];
         const isCompressed = contentEncoding === 'gzip' || contentEncoding === 'deflate';
         
-        // Remove compression headers since we'll decompress and recompress
         if (isCompressed) {
-          res.removeHeader('content-encoding');
-          res.removeHeader('content-length');
-        }
-        
-        // Check if the response is actually HTML by looking at the first few bytes
-        const chunks: Buffer[] = [];
-        proxyRes.on('data', (chunk: Buffer) => {
-          chunks.push(chunk);
-        });
-        
-        proxyRes.on('end', async () => {
-          try {
-            // Combine all chunks
-            const buffer = Buffer.concat(chunks);
-            let html: string;
-            
-            // Decompress if necessary
-            if (isCompressed) {
-              const zlib = require('zlib');
-              if (contentEncoding === 'gzip') {
-                html = zlib.gunzipSync(buffer).toString('utf8');
-              } else if (contentEncoding === 'deflate') {
-                html = zlib.inflateSync(buffer).toString('utf8');
-              } else {
-                html = buffer.toString('utf8');
+          // For compressed content, pipe directly to avoid decompression issues
+          // The browser will handle the decompression
+          proxyRes.pipe(res);
+        } else {
+          // For uncompressed HTML, we can process it
+          const chunks: Buffer[] = [];
+          proxyRes.on('data', (chunk: Buffer) => {
+            chunks.push(chunk);
+          });
+          
+          proxyRes.on('end', async () => {
+            try {
+              // Combine all chunks
+              const buffer = Buffer.concat(chunks);
+              const html = buffer.toString('utf8');
+              
+              // Check if this is actually HTML
+              if (!html.trim().startsWith('<') && !html.includes('<html') && !html.includes('<!DOCTYPE')) {
+                // Not HTML, send as-is
+                res.send(html);
+                return;
               }
-            } else {
-              html = buffer.toString('utf8');
+              
+              // Create rewrite context
+              const proxyBaseUrl = `${req.protocol}://${req.get('host')}`;
+              const context: RewriteContext = {
+                originalUrl: targetUrl.toString(),
+                proxyBaseUrl,
+                targetHost: targetUrl.hostname,
+                targetProtocol: targetUrl.protocol
+              };
+              
+              // Process the HTML content
+              const processedHtml = await this.contentProcessor.processHtmlContent(html, context);
+              
+              // Send the processed content
+              res.send(processedHtml);
+            } catch (error) {
+              this.logger.error('Error processing HTML content:', error as Record<string, any>);
+              // Fallback to original content
+              const buffer = Buffer.concat(chunks);
+              res.send(buffer.toString('utf8'));
             }
-            
-            // Check if this is actually HTML
-            if (!html.trim().startsWith('<') && !html.includes('<html') && !html.includes('<!DOCTYPE')) {
-              // Not HTML, send as-is
-              res.send(html);
-              return;
+          });
+          
+          proxyRes.on('error', (error: any) => {
+            this.logger.error('Error reading proxy response:', error);
+            if (!res.headersSent) {
+              res.status(500).json({ error: 'Error processing response' });
             }
-            
-            // Create rewrite context
-            const proxyBaseUrl = `${req.protocol}://${req.get('host')}`;
-            const context: RewriteContext = {
-              originalUrl: targetUrl.toString(),
-              proxyBaseUrl,
-              targetHost: targetUrl.hostname,
-              targetProtocol: targetUrl.protocol
-            };
-            
-            // Process the HTML content
-            const processedHtml = await this.contentProcessor.processHtmlContent(html, context);
-            
-            // Send the processed content
-            res.send(processedHtml);
-          } catch (error) {
-            this.logger.error('Error processing HTML content:', error as Record<string, any>);
-            // Fallback to original content
-            const buffer = Buffer.concat(chunks);
-            res.send(buffer.toString('utf8'));
-          }
-        });
-        
-        proxyRes.on('error', (error: any) => {
-          this.logger.error('Error reading proxy response:', error);
-          if (!res.headersSent) {
-            res.status(500).json({ error: 'Error processing response' });
-          }
-        });
+          });
+        }
       } else {
         // For non-HTML content, pipe directly
         proxyRes.pipe(res);

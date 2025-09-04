@@ -411,7 +411,7 @@ export class ProxyServer {
       '192.168.1.100', '10.0.0.50', '172.16.0.25', '203.0.113.1',
       '198.51.100.1', '192.0.2.1', '8.8.8.8', '1.1.1.1'
     ];
-    return ips[Math.floor(Math.random() * ips.length)];
+    return ips[Math.floor(Math.random() * ips.length)] || '192.168.1.100';
   }
 
   private generateCFRay(): string {

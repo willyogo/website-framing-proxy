@@ -238,61 +238,207 @@ export class ProxyServer {
     const url = new URL(targetUrl);
     const hostname = url.hostname;
     
-    // Remove any headers that might identify us as a proxy
-    proxyReq.removeHeader('x-forwarded-for');
-    proxyReq.removeHeader('x-real-ip');
-    proxyReq.removeHeader('x-forwarded-proto');
-    proxyReq.removeHeader('x-forwarded-host');
-    proxyReq.removeHeader('x-forwarded-port');
-    proxyReq.removeHeader('x-original-url');
-    proxyReq.removeHeader('x-rewrite-url');
+    // Remove ALL proxy-identifying headers
+    const proxyHeaders = [
+      'x-forwarded-for', 'x-real-ip', 'x-forwarded-proto', 'x-forwarded-host',
+      'x-forwarded-port', 'x-original-url', 'x-rewrite-url', 'x-forwarded-server',
+      'x-cluster-client-ip', 'x-client-ip', 'x-remote-ip', 'x-remote-addr',
+      'via', 'x-via', 'connection', 'upgrade', 'proxy-connection'
+    ];
     
-    // Add realistic browser headers that are often missing
-    proxyReq.setHeader('Sec-GPC', '1'); // Global Privacy Control
-    proxyReq.setHeader('Viewport-Width', '1920');
-    proxyReq.setHeader('Width', '1920');
+    proxyHeaders.forEach(header => {
+      proxyReq.removeHeader(header);
+    });
     
-    // Add some realistic browser behavior patterns
-    if (Math.random() < 0.2) {
-      // Sometimes add a preflight request header
-      proxyReq.setHeader('Access-Control-Request-Method', 'GET');
-    }
+    // Generate realistic browser fingerprint
+    const browserFingerprint = this.generateBrowserFingerprint();
     
-    // Add some timing-based headers to make it look like a real browser
+    // Set comprehensive browser headers
+    proxyReq.setHeader('Accept', browserFingerprint.accept);
+    proxyReq.setHeader('Accept-Language', browserFingerprint.acceptLanguage);
+    proxyReq.setHeader('Accept-Encoding', browserFingerprint.acceptEncoding);
+    proxyReq.setHeader('User-Agent', browserFingerprint.userAgent);
+    
+    // Set modern browser headers
+    proxyReq.setHeader('Sec-CH-UA', browserFingerprint.secChUa);
+    proxyReq.setHeader('Sec-CH-UA-Mobile', browserFingerprint.secChUaMobile);
+    proxyReq.setHeader('Sec-CH-UA-Platform', browserFingerprint.secChUaPlatform);
+    proxyReq.setHeader('Sec-CH-UA-Arch', browserFingerprint.secChUaArch);
+    proxyReq.setHeader('Sec-CH-UA-Bitness', browserFingerprint.secChUaBitness);
+    proxyReq.setHeader('Sec-CH-UA-Full-Version', browserFingerprint.secChUaFullVersion);
+    proxyReq.setHeader('Sec-CH-UA-Full-Version-List', browserFingerprint.secChUaFullVersionList);
+    proxyReq.setHeader('Sec-CH-UA-Model', browserFingerprint.secChUaModel);
+    proxyReq.setHeader('Sec-CH-UA-WoW64', browserFingerprint.secChUaWoW64);
+    
+    // Set viewport and screen info
+    proxyReq.setHeader('Viewport-Width', browserFingerprint.viewportWidth);
+    proxyReq.setHeader('Width', browserFingerprint.width);
+    proxyReq.setHeader('Sec-GPC', '1');
+    
+    // Set realistic referer
+    const referers = [
+      'https://www.google.com/',
+      'https://www.bing.com/',
+      'https://duckduckgo.com/',
+      'https://www.yahoo.com/',
+      'https://www.baidu.com/',
+      'https://yandex.com/'
+    ];
+    proxyReq.setHeader('Referer', referers[Math.floor(Math.random() * referers.length)]);
+    
+    // Set timing headers
     const now = new Date();
-    proxyReq.setHeader('If-Modified-Since', new Date(now.getTime() - 86400000).toUTCString());
+    proxyReq.setHeader('If-Modified-Since', new Date(now.getTime() - Math.random() * 86400000).toUTCString());
     
-    // Add some realistic browser capabilities
-    proxyReq.setHeader('Sec-CH-UA-Arch', '"x86"');
-    proxyReq.setHeader('Sec-CH-UA-Bitness', '"64"');
-    proxyReq.setHeader('Sec-CH-UA-Full-Version', '"120.0.6099.109"');
-    proxyReq.setHeader('Sec-CH-UA-Full-Version-List', '"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.6099.109", "Google Chrome";v="120.0.6099.109"');
-    proxyReq.setHeader('Sec-CH-UA-Model', '""');
-    proxyReq.setHeader('Sec-CH-UA-WoW64', '?0');
-    
-    // Site-specific bot detection evasion
-    if (hostname.includes('cloudflare') || hostname.includes('cf-')) {
-      // Cloudflare specific evasion - try to look like a real user
-      proxyReq.setHeader('CF-Connecting-IP', '127.0.0.1');
-      proxyReq.setHeader('CF-Ray', 'mock-ray-id');
-      proxyReq.setHeader('CF-Visitor', '{"scheme":"https"}');
-    }
-    
-    if (hostname.includes('vercel')) {
-      // Vercel specific evasion
-      proxyReq.setHeader('X-Vercel-Id', 'mock-vercel-id');
-      proxyReq.setHeader('X-Vercel-Cache', 'MISS');
-    }
-    
-    // Add some randomness to make requests look more natural
-    if (Math.random() < 0.1) {
+    // Add realistic browser behavior
+    if (Math.random() < 0.15) {
       proxyReq.setHeader('X-Requested-With', 'XMLHttpRequest');
     }
     
-    // Add some realistic browser behavior
-    if (Math.random() < 0.05) {
-      proxyReq.setHeader('X-Forwarded-For', '127.0.0.1');
+    // Advanced CDN-specific evasion
+    this.addCDNSpecificEvasion(proxyReq, hostname);
+    
+    // Add realistic connection behavior
+    proxyReq.setHeader('Connection', 'keep-alive');
+    proxyReq.setHeader('Upgrade-Insecure-Requests', '1');
+    proxyReq.setHeader('Cache-Control', 'max-age=0');
+    proxyReq.setHeader('DNT', '1');
+  }
+
+  private generateBrowserFingerprint(): any {
+    const browsers = [
+      {
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        acceptLanguage: 'en-US,en;q=0.9',
+        acceptEncoding: 'gzip, deflate, br',
+        secChUa: '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        secChUaMobile: '?0',
+        secChUaPlatform: '"macOS"',
+        secChUaArch: '"x86"',
+        secChUaBitness: '"64"',
+        secChUaFullVersion: '"120.0.6099.109"',
+        secChUaFullVersionList: '"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.6099.109", "Google Chrome";v="120.0.6099.109"',
+        secChUaModel: '""',
+        secChUaWoW64: '?0',
+        viewportWidth: '1920',
+        width: '1920'
+      },
+      {
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        acceptLanguage: 'en-US,en;q=0.9',
+        acceptEncoding: 'gzip, deflate, br',
+        secChUa: '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        secChUaMobile: '?0',
+        secChUaPlatform: '"Windows"',
+        secChUaArch: '"x86"',
+        secChUaBitness: '"64"',
+        secChUaFullVersion: '"120.0.6099.109"',
+        secChUaFullVersionList: '"Not_A Brand";v="8.0.0.0", "Chromium";v="120.0.6099.109", "Google Chrome";v="120.0.6099.109"',
+        secChUaModel: '""',
+        secChUaWoW64: '?0',
+        viewportWidth: '1920',
+        width: '1920'
+      },
+      {
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        acceptLanguage: 'en-US,en;q=0.9',
+        acceptEncoding: 'gzip, deflate, br',
+        secChUa: '"Not_A Brand";v="8", "Safari";v="17"',
+        secChUaMobile: '?0',
+        secChUaPlatform: '"macOS"',
+        secChUaArch: '"x86"',
+        secChUaBitness: '"64"',
+        secChUaFullVersion: '"17.1"',
+        secChUaFullVersionList: '"Not_A Brand";v="8.0.0.0", "Safari";v="17.1"',
+        secChUaModel: '""',
+        secChUaWoW64: '?0',
+        viewportWidth: '1920',
+        width: '1920'
+      }
+    ];
+    
+    return browsers[Math.floor(Math.random() * browsers.length)];
+  }
+
+  private addCDNSpecificEvasion(proxyReq: any, hostname: string): void {
+    // CloudFront/AWS specific evasion
+    if (hostname.includes('cloudfront') || hostname.includes('amazonaws') || hostname.includes('s3')) {
+      // Try to look like a real browser accessing CloudFront
+      proxyReq.setHeader('X-Forwarded-For', this.generateRandomIP());
+      proxyReq.setHeader('X-Forwarded-Proto', 'https');
+      proxyReq.setHeader('X-Forwarded-Port', '443');
+      proxyReq.setHeader('CloudFront-Viewer-Country', 'US');
+      proxyReq.setHeader('CloudFront-Viewer-Country-Region', 'CA');
+      proxyReq.setHeader('CloudFront-Viewer-City', 'San Francisco');
+      proxyReq.setHeader('CloudFront-Viewer-City-Latitude', '37.7749');
+      proxyReq.setHeader('CloudFront-Viewer-City-Longitude', '-122.4194');
+      proxyReq.setHeader('CloudFront-Viewer-Time-Zone', 'America/Los_Angeles');
+      proxyReq.setHeader('CloudFront-Viewer-TLS', 'TLSv1.3');
+      proxyReq.setHeader('CloudFront-Viewer-TLS-Cipher', 'TLS_AES_256_GCM_SHA384');
     }
+    
+    // Cloudflare specific evasion
+    if (hostname.includes('cloudflare') || hostname.includes('cf-')) {
+      proxyReq.setHeader('CF-Connecting-IP', this.generateRandomIP());
+      proxyReq.setHeader('CF-Ray', this.generateCFRay());
+      proxyReq.setHeader('CF-Visitor', '{"scheme":"https"}');
+      proxyReq.setHeader('CF-IPCountry', 'US');
+      proxyReq.setHeader('CF-Timezone', 'America/Los_Angeles');
+    }
+    
+    // Akamai specific evasion
+    if (hostname.includes('akamai') || hostname.includes('akamaihd')) {
+      proxyReq.setHeader('X-Akamai-Transformed', '9');
+      proxyReq.setHeader('X-Akamai-Edge-IP', this.generateRandomIP());
+      proxyReq.setHeader('X-Akamai-Request-ID', this.generateRequestId());
+    }
+    
+    // Vercel specific evasion
+    if (hostname.includes('vercel')) {
+      proxyReq.setHeader('X-Vercel-Id', this.generateVercelId());
+      proxyReq.setHeader('X-Vercel-Cache', 'MISS');
+      proxyReq.setHeader('X-Vercel-IP-Country', 'US');
+      proxyReq.setHeader('X-Vercel-IP-City', 'San Francisco');
+      proxyReq.setHeader('X-Vercel-IP-Region', 'CA');
+    }
+  }
+
+  private generateRandomIP(): string {
+    const ips = [
+      '192.168.1.100', '10.0.0.50', '172.16.0.25', '203.0.113.1',
+      '198.51.100.1', '192.0.2.1', '8.8.8.8', '1.1.1.1'
+    ];
+    return ips[Math.floor(Math.random() * ips.length)];
+  }
+
+  private generateCFRay(): string {
+    const chars = '0123456789abcdef';
+    let result = '';
+    for (let i = 0; i < 16; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result + '-DFW';
+  }
+
+  private generateRequestId(): string {
+    const chars = '0123456789abcdef';
+    let result = '';
+    for (let i = 0; i < 32; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
+
+  private generateVercelId(): string {
+    const chars = '0123456789abcdef';
+    let result = '';
+    for (let i = 0; i < 24; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
   }
 
   private extractTargetUrl(req: express.Request): string | null {

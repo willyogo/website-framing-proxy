@@ -2,16 +2,18 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-import { ContentProcessor, RewriteContext } from '../processing/content-processor';
+// import { ContentProcessor, RewriteContext } from '../processing/content-processor';
 // import { CookieManager } from '../processing/cookie-manager';
+import { HTMLInjector } from '../injection/html-injector';
 // import { SubdomainRouter } from './subdomain-router'; // Will be used in Phase 3
 import { Logger, LogLevel } from '../utils/logger';
 
 export class ProxyServer {
   private app: express.Application;
   private port: number;
-  private contentProcessor: ContentProcessor;
+  // private contentProcessor: ContentProcessor;
   // private cookieManager: CookieManager;
+  private htmlInjector: HTMLInjector;
   // private subdomainRouter: SubdomainRouter; // Will be used in Phase 3
   private logger: Logger;
 
@@ -23,8 +25,9 @@ export class ProxyServer {
     
     // Initialize Phase 2 components
     // Initialize Phase 2 components
-    this.contentProcessor = new ContentProcessor(this.logger);
+    // this.contentProcessor = new ContentProcessor(this.logger);
     // this.cookieManager = new CookieManager(this.logger);
+    this.htmlInjector = new HTMLInjector(this.logger);
     
     // this.subdomainRouter = new SubdomainRouter(); // Will be used in Phase 3
     
@@ -243,9 +246,49 @@ export class ProxyServer {
       //   res.setHeader('Set-Cookie', processedCookies);
       // }
       
-      // For now, let's keep it simple and just pipe the response directly
-      // We'll add content processing back step by step once we understand the compression issue
-      proxyRes.pipe(res);
+      // Process content if it's HTML
+      const contentType = proxyRes.headers['content-type'] || '';
+      if (contentType.includes('text/html')) {
+        // For HTML content, collect data and inject client-side processor
+        const chunks: Buffer[] = [];
+        proxyRes.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        
+        proxyRes.on('end', async () => {
+          try {
+            const buffer = Buffer.concat(chunks);
+            const html = buffer.toString('utf8');
+            
+            // Check if this is actually HTML
+            if (!this.htmlInjector.shouldProcess(html)) {
+              res.send(html);
+              return;
+            }
+            
+            // Inject client-side processor
+            const processedHtml = this.htmlInjector.injectClientProcessor(html);
+            
+            // Send the processed content
+            res.send(processedHtml);
+          } catch (error) {
+            this.logger.error('Error processing HTML content:', error as Record<string, any>);
+            // Fallback to original content
+            const buffer = Buffer.concat(chunks);
+            res.send(buffer.toString('utf8'));
+          }
+        });
+        
+        proxyRes.on('error', (error: any) => {
+          this.logger.error('Error reading proxy response:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error processing response' });
+          }
+        });
+      } else {
+        // For non-HTML content, pipe directly
+        proxyRes.pipe(res);
+      }
     });
     
     proxyReq.on('error', (err: any) => {

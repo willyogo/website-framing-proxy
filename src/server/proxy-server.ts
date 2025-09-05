@@ -75,6 +75,31 @@ export class ProxyServer {
     });
   }
 
+  private isSimpleSite(targetUrl: string): boolean {
+    // List of simple static sites that work well with client-side processing
+    const simpleSites = [
+      'example.com',
+      'nouns.world',
+      'myspace.com'
+    ];
+    
+    try {
+      const url = new URL(targetUrl);
+      const hostname = url.hostname.replace(/^www\./, '');
+      
+      // Check if it's a known simple site
+      if (simpleSites.includes(hostname)) {
+        return true;
+      }
+      
+      // For unknown sites, be conservative and assume they're complex
+      // This prevents breaking SSR sites like nouns.com, bigshottoyshop.com
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
   private setupRoutes(): void {
     // Health check endpoint
     this.app.get('/health', (_req, res) => {
@@ -252,38 +277,64 @@ export class ProxyServer {
       //   res.setHeader('Set-Cookie', processedCookies);
       // }
       
-      // Handle compressed content
-      const contentEncoding = proxyRes.headers['content-encoding'];
-      let stream = proxyRes;
+      // Simple approach: Stream directly for most sites, only process simple HTML
+      const contentType = proxyRes.headers['content-type'] || '';
+      const isHtml = contentType.includes('text/html');
+      const isSimpleSite = this.isSimpleSite(targetUrl.toString());
       
-      if (contentEncoding === 'gzip') {
-        const zlib = require('zlib');
-        stream = proxyRes.pipe(zlib.createGunzip());
-      } else if (contentEncoding === 'deflate') {
-        const zlib = require('zlib');
-        stream = proxyRes.pipe(zlib.createInflate());
-      }
-      
-      // Collect the response data for processing
-      const chunks: Buffer[] = [];
-      stream.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-      
-      stream.on('end', () => {
-        const buffer = Buffer.concat(chunks);
-        const content = buffer.toString('utf8');
+      if (isHtml && isSimpleSite) {
+        // Only process simple static sites with client-side injection
+        this.logger.info(`Processing simple site: ${targetUrl}`);
         
-        // Send the content (middleware will handle injection)
-        res.send(content);
-      });
-      
-      stream.on('error', (error: any) => {
-        this.logger.error('Error reading proxy response:', error);
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Error processing response' });
+        // Handle compressed content for simple sites
+        const contentEncoding = proxyRes.headers['content-encoding'];
+        let stream = proxyRes;
+        
+        if (contentEncoding === 'gzip' || contentEncoding === 'deflate') {
+          // Remove compression headers since we're decompressing on server side
+          res.removeHeader('content-encoding');
+          res.removeHeader('content-length');
+          res.removeHeader('vary');
+          
+          if (contentEncoding === 'gzip') {
+            const zlib = require('zlib');
+            stream = proxyRes.pipe(zlib.createGunzip());
+          } else if (contentEncoding === 'deflate') {
+            const zlib = require('zlib');
+            stream = proxyRes.pipe(zlib.createInflate());
+          }
         }
-      });
+        
+        // Collect the response data for processing
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        
+        stream.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          const content = buffer.toString('utf8');
+          
+          // Set the correct content length for decompressed content
+          if (contentEncoding === 'gzip' || contentEncoding === 'deflate') {
+            res.setHeader('content-length', Buffer.byteLength(content, 'utf8'));
+          }
+          
+          // Send the content (middleware will handle injection)
+          res.send(content);
+        });
+        
+        stream.on('error', (error: any) => {
+          this.logger.error('Error reading proxy response:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error processing response' });
+          }
+        });
+      } else {
+        // For complex sites (SSR, Next.js, etc.), stream directly without processing
+        this.logger.info(`Streaming complex site directly: ${targetUrl}`);
+        proxyRes.pipe(res);
+      }
     });
     
     proxyReq.on('error', (err: any) => {

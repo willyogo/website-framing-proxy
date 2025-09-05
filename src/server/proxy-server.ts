@@ -252,13 +252,25 @@ export class ProxyServer {
       //   res.setHeader('Set-Cookie', processedCookies);
       // }
       
+      // Handle compressed content
+      const contentEncoding = proxyRes.headers['content-encoding'];
+      let stream = proxyRes;
+      
+      if (contentEncoding === 'gzip') {
+        const zlib = require('zlib');
+        stream = proxyRes.pipe(zlib.createGunzip());
+      } else if (contentEncoding === 'deflate') {
+        const zlib = require('zlib');
+        stream = proxyRes.pipe(zlib.createInflate());
+      }
+      
       // Collect the response data for processing
       const chunks: Buffer[] = [];
-      proxyRes.on('data', (chunk: Buffer) => {
+      stream.on('data', (chunk: Buffer) => {
         chunks.push(chunk);
       });
       
-      proxyRes.on('end', () => {
+      stream.on('end', () => {
         const buffer = Buffer.concat(chunks);
         const content = buffer.toString('utf8');
         
@@ -266,7 +278,7 @@ export class ProxyServer {
         res.send(content);
       });
       
-      proxyRes.on('error', (error: any) => {
+      stream.on('error', (error: any) => {
         this.logger.error('Error reading proxy response:', error);
         if (!res.headersSent) {
           res.status(500).json({ error: 'Error processing response' });

@@ -252,9 +252,26 @@ export class ProxyServer {
       //   res.setHeader('Set-Cookie', processedCookies);
       // }
       
-      // For now, let's keep it simple and just pipe the response directly
-      // We'll add client-side processing via a different approach
-      proxyRes.pipe(res);
+      // Collect the response data for processing
+      const chunks: Buffer[] = [];
+      proxyRes.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      
+      proxyRes.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        const content = buffer.toString('utf8');
+        
+        // Send the content (middleware will handle injection)
+        res.send(content);
+      });
+      
+      proxyRes.on('error', (error: any) => {
+        this.logger.error('Error reading proxy response:', error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: 'Error processing response' });
+        }
+      });
     });
     
     proxyReq.on('error', (err: any) => {

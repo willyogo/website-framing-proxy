@@ -220,9 +220,9 @@ export class ProxyServer {
       res.removeHeader('content-security-policy');
       res.removeHeader('content-security-policy-report-only');
       
-      // Remove compression headers since we'll decompress and send uncompressed content
-      res.removeHeader('content-encoding');
-      res.removeHeader('content-length');
+      // Keep compression headers so browser can decompress properly
+      // res.removeHeader('content-encoding');
+      // res.removeHeader('content-length');
       
       // We'll set the correct content length after processing the HTML
       

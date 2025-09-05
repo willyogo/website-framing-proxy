@@ -203,6 +203,7 @@ export class ProxyServer {
       port: targetUrl.port || (isHttps ? 443 : 80),
       path: targetUrl.pathname + targetUrl.search,
       method: req.method,
+      timeout: 30000, // 30 second timeout
       headers: {
         ...req.headers,
         host: targetUrl.hostname,
@@ -235,6 +236,17 @@ export class ProxyServer {
     const proxyReq = client.request(options, async (proxyRes: any) => {
       console.log('Direct proxy response received:', proxyRes.statusCode);
       
+      // Handle redirects
+      if (proxyRes.statusCode && proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
+        const location = proxyRes.headers.location;
+        if (location) {
+          // If it's a relative redirect, make it absolute
+          const redirectUrl = location.startsWith('http') ? location : new URL(location, targetUrl.toString()).toString();
+          res.redirect(proxyRes.statusCode, `/proxy/${new URL(redirectUrl).hostname}${new URL(redirectUrl).pathname}${new URL(redirectUrl).search}`);
+          return;
+        }
+      }
+      
       // Set response status and headers
       res.status(proxyRes.statusCode);
       
@@ -242,7 +254,46 @@ export class ProxyServer {
       Object.keys(proxyRes.headers).forEach(key => {
         const value = proxyRes.headers[key];
         if (value !== undefined && key.toLowerCase() !== 'content-length') {
-          res.setHeader(key, value);
+          // Fix MIME types for common file extensions
+          if (key.toLowerCase() === 'content-type') {
+            if (typeof value === 'string') {
+              // Fix JavaScript MIME types
+              if (value.includes('text/html') && targetPath.match(/\.(js|mjs)$/i)) {
+                res.setHeader(key, 'application/javascript; charset=utf-8');
+              }
+              // Fix CSS MIME types
+              else if (value.includes('text/html') && targetPath.match(/\.css$/i)) {
+                res.setHeader(key, 'text/css; charset=utf-8');
+              }
+              // Fix font MIME types
+              else if (value.includes('text/html') && targetPath.match(/\.(woff|woff2|ttf|otf|eot)$/i)) {
+                res.setHeader(key, 'application/font-woff; charset=utf-8');
+              }
+              // Fix image MIME types
+              else if (value.includes('text/html') && targetPath.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)) {
+                const ext = targetPath.match(/\.([^.]+)$/i)?.[1]?.toLowerCase();
+                const mimeTypes: { [key: string]: string } = {
+                  'png': 'image/png',
+                  'jpg': 'image/jpeg',
+                  'jpeg': 'image/jpeg',
+                  'gif': 'image/gif',
+                  'svg': 'image/svg+xml',
+                  'webp': 'image/webp'
+                };
+                if (ext && mimeTypes[ext]) {
+                  res.setHeader(key, mimeTypes[ext]);
+                } else {
+                  res.setHeader(key, value);
+                }
+              } else {
+                res.setHeader(key, value);
+              }
+            } else {
+              res.setHeader(key, value);
+            }
+          } else {
+            res.setHeader(key, value);
+          }
         }
       });
       
@@ -259,11 +310,13 @@ export class ProxyServer {
       
       // Set CORS headers
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, User-Agent, Referer, Cookie, Cache-Control');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Date, Server, X-Proxy-Version');
       
       // Debug header to verify we're running the latest code
-      res.setHeader('X-Proxy-Version', 'streaming-decompression-v1');
+      res.setHeader('X-Proxy-Version', 'mime-fix-v1');
       
       // Process response cookies
       const setCookieHeaders = proxyRes.headers['set-cookie'];
@@ -339,8 +392,25 @@ export class ProxyServer {
     proxyReq.on('error', (err: any) => {
       console.error('Direct proxy request error:', err);
       if (!res.headersSent) {
-        res.status(500).json({ error: 'Proxy request failed', details: err.message });
+        if (err.message.includes('timeout')) {
+          res.status(504).json({ error: 'Proxy request timeout', details: 'The target server took too long to respond' });
+        } else if (err.message.includes('ECONNREFUSED')) {
+          res.status(502).json({ error: 'Connection refused', details: 'Unable to connect to target server' });
+        } else if (err.message.includes('ENOTFOUND')) {
+          res.status(502).json({ error: 'Host not found', details: 'Target hostname could not be resolved' });
+        } else {
+          res.status(500).json({ error: 'Proxy request failed', details: err.message });
+        }
       }
+    });
+    
+    // Handle timeout
+    proxyReq.on('timeout', () => {
+      console.error('Proxy request timeout');
+      if (!res.headersSent) {
+        res.status(504).json({ error: 'Proxy request timeout', details: 'The target server took too long to respond' });
+      }
+      proxyReq.destroy();
     });
     
     // Handle request timeout

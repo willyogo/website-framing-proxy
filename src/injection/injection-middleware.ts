@@ -144,11 +144,17 @@ export class InjectionMiddleware {
         window.fetch = function(input, init) {
             if (typeof input === 'string') {
                 const rewrittenUrl = URLRewriter.rewriteUrl(input);
-                return originalFetch.call(this, rewrittenUrl, init);
+                return originalFetch.call(this, rewrittenUrl, init).catch(error => {
+                    console.warn('Fetch request failed:', error);
+                    throw error;
+                });
             } else if (input instanceof Request) {
                 const rewrittenUrl = URLRewriter.rewriteUrl(input.url);
                 const newRequest = new Request(rewrittenUrl, input);
-                return originalFetch.call(this, newRequest, init);
+                return originalFetch.call(this, newRequest, init).catch(error => {
+                    console.warn('Fetch request failed:', error);
+                    throw error;
+                });
             }
             return originalFetch.call(this, input, init);
         };

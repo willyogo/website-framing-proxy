@@ -3,7 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 // import { ContentProcessor, RewriteContext } from '../processing/content-processor';
-// import { CookieManager } from '../processing/cookie-manager';
+import { CookieManager } from '../processing/cookie-manager';
 // import { HTMLInjector } from '../injection/html-injector';
 import { InjectionMiddleware } from '../injection/injection-middleware';
 // import { SubdomainRouter } from './subdomain-router'; // Will be used in Phase 3
@@ -13,7 +13,7 @@ export class ProxyServer {
   private app: express.Application;
   private port: number;
   // private contentProcessor: ContentProcessor;
-  // private cookieManager: CookieManager;
+  private cookieManager: CookieManager;
   // private htmlInjector: HTMLInjector;
   private injectionMiddleware: InjectionMiddleware;
   // private subdomainRouter: SubdomainRouter; // Will be used in Phase 3
@@ -28,7 +28,7 @@ export class ProxyServer {
     // Initialize Phase 2 components
     // Initialize Phase 2 components
     // this.contentProcessor = new ContentProcessor(this.logger);
-    // this.cookieManager = new CookieManager(this.logger);
+    this.cookieManager = new CookieManager(this.logger);
     // this.htmlInjector = new HTMLInjector(this.logger);
     this.injectionMiddleware = new InjectionMiddleware();
     
@@ -194,9 +194,9 @@ export class ProxyServer {
     
     console.log('Making direct request to:', targetUrl.toString());
     
-    // Cookie processing temporarily disabled
-    // const requestCookies = req.get('Cookie') || '';
-    // const processedCookies = this.cookieManager.processRequestCookies(requestCookies, targetUrl.hostname);
+    // Process request cookies
+    const requestCookies = req.get('Cookie') || '';
+    const processedCookies = this.cookieManager.processRequestCookies(requestCookies, targetUrl.hostname);
     
     const options: any = {
       hostname: targetUrl.hostname,
@@ -221,10 +221,9 @@ export class ProxyServer {
     }
     
     // Set processed cookies if any
-    // Cookie processing temporarily disabled
-    // if (processedCookies) {
-    //   options.headers['Cookie'] = processedCookies;
-    // }
+    if (processedCookies) {
+      options.headers['Cookie'] = processedCookies;
+    }
     
     // Remove proxy-identifying headers
     delete options.headers['x-forwarded-for'];
@@ -266,16 +265,16 @@ export class ProxyServer {
       // Debug header to verify we're running the latest code
       res.setHeader('X-Proxy-Version', 'streaming-decompression-v1');
       
-      // Cookie processing temporarily disabled
-      // const setCookieHeaders = proxyRes.headers['set-cookie'];
-      // if (setCookieHeaders) {
-      //   const processedCookies = this.cookieManager.processResponseCookies(
-      //     setCookieHeaders,
-      //     targetUrl.hostname,
-      //     req.get('host') || 'localhost'
-      //   );
-      //   res.setHeader('Set-Cookie', processedCookies);
-      // }
+      // Process response cookies
+      const setCookieHeaders = proxyRes.headers['set-cookie'];
+      if (setCookieHeaders) {
+        const processedCookies = this.cookieManager.processResponseCookies(
+          setCookieHeaders,
+          targetUrl.hostname,
+          req.get('host') || 'localhost'
+        );
+        res.setHeader('Set-Cookie', processedCookies);
+      }
       
       // Simple approach: Stream directly for most sites, only process simple HTML
       const contentType = proxyRes.headers['content-type'] || '';

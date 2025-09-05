@@ -73,6 +73,53 @@ export class InjectionMiddleware {
                 });
             });
         });
+        
+        // Process CSS for URL rewriting
+        processCSS();
+    }
+    
+    // Process CSS for URL rewriting
+    function processCSS() {
+        // Process external stylesheets
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(link => {
+            const href = link.getAttribute('href');
+            if (href) {
+                const rewrittenHref = URLRewriter.rewriteUrl(href);
+                if (rewrittenHref !== href) {
+                    link.setAttribute('href', rewrittenHref);
+                }
+            }
+        });
+        
+        // Process inline styles and style elements
+        document.querySelectorAll('*[style]').forEach(element => {
+            const style = element.getAttribute('style');
+            if (style) {
+                const rewrittenStyle = rewriteCSSUrls(style);
+                if (rewrittenStyle !== style) {
+                    element.setAttribute('style', rewrittenStyle);
+                }
+            }
+        });
+        
+        // Process <style> elements
+        document.querySelectorAll('style').forEach(styleElement => {
+            if (styleElement.textContent) {
+                const rewrittenCSS = rewriteCSSUrls(styleElement.textContent);
+                if (rewrittenCSS !== styleElement.textContent) {
+                    styleElement.textContent = rewrittenCSS;
+                }
+            }
+        });
+    }
+    
+    // Rewrite URLs in CSS content
+    function rewriteCSSUrls(cssContent) {
+        // Match url() functions in CSS
+        return cssContent.replace(/url\\(['"]?([^'")]+)['"]?\\)/g, (match, url) => {
+            const rewrittenUrl = URLRewriter.rewriteUrl(url);
+            return \`url('\${rewrittenUrl}')\`;
+        });
     }
     
     // Initialize when DOM is ready
@@ -81,6 +128,59 @@ export class InjectionMiddleware {
     } else {
         processElements();
     }
+    
+    // Intercept AJAX and Fetch API calls
+    function interceptAPIs() {
+        // Intercept XMLHttpRequest
+        const originalXHROpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...args) {
+            this._originalUrl = url;
+            const rewrittenUrl = URLRewriter.rewriteUrl(url);
+            return originalXHROpen.call(this, method, rewrittenUrl, ...args);
+        };
+        
+        // Intercept fetch API
+        const originalFetch = window.fetch;
+        window.fetch = function(input, init) {
+            if (typeof input === 'string') {
+                const rewrittenUrl = URLRewriter.rewriteUrl(input);
+                return originalFetch.call(this, rewrittenUrl, init);
+            } else if (input instanceof Request) {
+                const rewrittenUrl = URLRewriter.rewriteUrl(input.url);
+                const newRequest = new Request(rewrittenUrl, input);
+                return originalFetch.call(this, newRequest, init);
+            }
+            return originalFetch.call(this, input, init);
+        };
+        
+        // Intercept dynamic imports (if supported)
+        if (window.import) {
+            const originalImport = window.import;
+            window.import = function(specifier) {
+                const rewrittenSpecifier = URLRewriter.rewriteUrl(specifier);
+                return originalImport.call(this, rewrittenSpecifier);
+            };
+        }
+    }
+    
+    // Initialize API interception
+    interceptAPIs();
+    
+    // Observe DOM changes for dynamic content
+    const observer = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                mutation.addedNodes.forEach(node => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        // Re-run processing for newly added elements
+                        processElements();
+                    }
+                });
+            }
+        });
+    });
+    
+    observer.observe(document.body, { childList: true, subtree: true });
 })();
 </script>
 `;

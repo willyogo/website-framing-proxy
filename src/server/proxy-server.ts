@@ -2,8 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-// Content processing temporarily disabled
-// import { ContentProcessor, RewriteContext } from '../processing/content-processor';
+import { ContentProcessor, RewriteContext } from '../processing/content-processor';
 // import { CookieManager } from '../processing/cookie-manager';
 // import { SubdomainRouter } from './subdomain-router'; // Will be used in Phase 3
 import { Logger, LogLevel } from '../utils/logger';
@@ -11,8 +10,7 @@ import { Logger, LogLevel } from '../utils/logger';
 export class ProxyServer {
   private app: express.Application;
   private port: number;
-  // Content processing temporarily disabled
-  // private contentProcessor: ContentProcessor;
+  private contentProcessor: ContentProcessor;
   // private cookieManager: CookieManager;
   // private subdomainRouter: SubdomainRouter; // Will be used in Phase 3
   private logger: Logger;
@@ -24,8 +22,8 @@ export class ProxyServer {
     this.logger.setLogLevel(LogLevel.DEBUG);
     
     // Initialize Phase 2 components
-    // Content processing temporarily disabled
-    // this.contentProcessor = new ContentProcessor(this.logger);
+    // Initialize Phase 2 components
+    this.contentProcessor = new ContentProcessor(this.logger);
     // this.cookieManager = new CookieManager(this.logger);
     
     // this.subdomainRouter = new SubdomainRouter(); // Will be used in Phase 3
@@ -245,9 +243,58 @@ export class ProxyServer {
       //   res.setHeader('Set-Cookie', processedCookies);
       // }
       
-      // For now, let's simplify and just pipe the response directly
-      // The browser can handle compressed content, and we'll process HTML later
-      proxyRes.pipe(res);
+      // Process content if it's HTML
+      const contentType = proxyRes.headers['content-type'] || '';
+      if (contentType.includes('text/html')) {
+        // For HTML content, collect data and process
+        const chunks: Buffer[] = [];
+        proxyRes.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+        
+        proxyRes.on('end', async () => {
+          try {
+            const buffer = Buffer.concat(chunks);
+            const html = buffer.toString('utf8');
+            
+            // Check if this is actually HTML
+            if (!html.trim().startsWith('<') && !html.includes('<html') && !html.includes('<!DOCTYPE')) {
+              res.send(html);
+              return;
+            }
+            
+            // Create rewrite context
+            const proxyBaseUrl = `${req.protocol}://${req.get('host')}`;
+            const context: RewriteContext = {
+              originalUrl: targetUrl.toString(),
+              proxyBaseUrl,
+              targetHost: targetUrl.hostname,
+              targetProtocol: targetUrl.protocol
+            };
+            
+            // Process the HTML content
+            const processedHtml = await this.contentProcessor.processHtmlContent(html, context);
+            
+            // Send the processed content
+            res.send(processedHtml);
+          } catch (error) {
+            this.logger.error('Error processing HTML content:', error as Record<string, any>);
+            // Fallback to original content
+            const buffer = Buffer.concat(chunks);
+            res.send(buffer.toString('utf8'));
+          }
+        });
+        
+        proxyRes.on('error', (error: any) => {
+          this.logger.error('Error reading proxy response:', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error processing response' });
+          }
+        });
+      } else {
+        // For non-HTML content, pipe directly
+        proxyRes.pipe(res);
+      }
     });
     
     proxyReq.on('error', (err: any) => {

@@ -67,7 +67,15 @@ export class ProxyServer {
         );
         if (isCandidate) {
           const referer = req.get('Referer') || '';
-          const m = referer.match(/\/proxy\/([^\/]+)\//);
+          let m = referer.match(/\/proxy\/([^\/]+)\//);
+          // Fallback to cookie (set by client injector)
+          if (!m) {
+            const cookie = req.get('Cookie') || '';
+            const cm = cookie.match(/(?:^|; )x-proxy-target=([^;]+)/);
+            if (cm && cm[1]) {
+              m = [cm[0], decodeURIComponent(cm[1])];
+            }
+          }
           if (m && m[1]) {
             const host = m[1];
             const query = req.url.includes('?') ? ('?' + req.url.split('?')[1]) : '';
@@ -457,12 +465,38 @@ export class ProxyServer {
           // Avoid double-inject if already present
           if (!html.includes(CLIENT_PROCESSOR_MARKER)) {
             const injectionScript = getClientProcessorScript();
-            if (html.includes('</body>')) {
-              html = html.replace('</body>', `${injectionScript}</body>`);
+            // Insert as early as possible: right after opening <head>
+            const lower = html.toLowerCase();
+            const headOpenIdx = lower.indexOf('<head');
+            if (headOpenIdx !== -1) {
+              const headTagEnd = html.indexOf('>', headOpenIdx);
+              if (headTagEnd !== -1) {
+                html = html.slice(0, headTagEnd + 1) + injectionScript + html.slice(headTagEnd + 1);
+              } else if (html.includes('</head>')) {
+                html = html.replace('</head>', `${injectionScript}</head>`);
+              } else if (html.includes('<body')) {
+                const bodyOpenIdx = lower.indexOf('<body');
+                const bodyTagEnd = html.indexOf('>', bodyOpenIdx);
+                if (bodyTagEnd !== -1) {
+                  html = html.slice(0, bodyTagEnd + 1) + injectionScript + html.slice(bodyTagEnd + 1);
+                } else {
+                  html = injectionScript + html;
+                }
+              } else {
+                html = injectionScript + html;
+              }
             } else if (html.includes('</head>')) {
               html = html.replace('</head>', `${injectionScript}</head>`);
+            } else if (html.includes('<body')) {
+              const bodyOpenIdx = lower.indexOf('<body');
+              const bodyTagEnd = html.indexOf('>', bodyOpenIdx);
+              if (bodyTagEnd !== -1) {
+                html = html.slice(0, bodyTagEnd + 1) + injectionScript + html.slice(bodyTagEnd + 1);
+              } else {
+                html = injectionScript + html;
+              }
             } else {
-              html = html + injectionScript;
+              html = injectionScript + html;
             }
           }
 

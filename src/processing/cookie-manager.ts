@@ -39,8 +39,8 @@ export class CookieManager {
       try {
         const parsedCookie = this.parseCookie(cookie);
         if (parsedCookie) {
-          // Store the original cookie
-          mapping!.cookies.set(parsedCookie.name, cookie);
+          // Store only the name=value for request mapping
+          mapping!.cookies.set(parsedCookie.name, `${parsedCookie.name}=${parsedCookie.value}`);
           
           // Create a mapped cookie for the proxy domain
           const mappedCookie = this.createMappedCookie(parsedCookie, proxyDomain);
@@ -67,7 +67,7 @@ export class CookieManager {
     }
 
     const originalCookies: string[] = [];
-    const cookiePairs = requestCookies.split(';').map(c => c.trim());
+    const cookiePairs = (requestCookies || '').split(';').map(c => c.trim()).filter(Boolean);
 
     cookiePairs.forEach(cookiePair => {
       const [name] = cookiePair.split('=');

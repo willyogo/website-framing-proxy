@@ -25,6 +25,8 @@ export function getClientProcessorScript(): string {
 
   // Debug
   try { console.log('Client processor initialized:', { proxyBaseUrl: PROXY_BASE_URL, targetHost: TARGET_HOST, currentHostname: window.location.hostname, currentPath: window.location.pathname }); } catch(_) {}
+  // Persist target host for server-side fallbacks (e.g., when Referer is missing)
+  try { document.cookie = 'x-proxy-target=' + encodeURIComponent(TARGET_HOST) + '; path=/'; } catch(_) {}
 
   // URL rewriting utilities
   const URLRewriter = {
@@ -49,11 +51,13 @@ export function getClientProcessorScript(): string {
         // Absolute
         const u2 = new URL(url, window.location.href);
         if (u2.pathname.startsWith('/proxy/')) return url;
-        if (u2.hostname === TARGET_HOST || u2.hostname === ('www.' + TARGET_HOST) || u2.hostname === window.location.hostname) {
+        if (u2.hostname === window.location.hostname && !u2.pathname.startsWith('/proxy/')) {
+          // Same origin but not proxied path -> send via current target host
           return PROXY_PREFIX + u2.pathname + u2.search + u2.hash;
         }
-        if (u2.hostname === window.location.hostname && !u2.pathname.startsWith('/proxy/')) {
-          return PROXY_PREFIX + u2.pathname + u2.search + u2.hash;
+        // Any other http(s) absolute URL -> route through proxy by hostname
+        if (u2.protocol === 'http:' || u2.protocol === 'https:') {
+          return PROXY_BASE_URL + '/proxy/' + u2.hostname + u2.pathname + u2.search + u2.hash;
         }
         return url;
       } catch (e) {
@@ -205,12 +209,27 @@ export class InjectionMiddleware {
           if (typeof data === 'string' && data.trim().startsWith('<')) {
             const injectionScript = getClientProcessorScript();
             if (!data.includes(CLIENT_PROCESSOR_MARKER)) {
-              if (data.includes('</body>')) {
-                data = data.replace('</body>', injectionScript + '</body>');
+              // Prefer earliest insertion: right after opening <head>
+              const headOpenIdx = data.toLowerCase().indexOf('<head');
+              if (headOpenIdx !== -1) {
+                const headTagEnd = data.indexOf('>', headOpenIdx);
+                if (headTagEnd !== -1) {
+                  data = data.slice(0, headTagEnd + 1) + injectionScript + data.slice(headTagEnd + 1);
+                } else {
+                  data = injectionScript + data;
+                }
               } else if (data.includes('</head>')) {
                 data = data.replace('</head>', injectionScript + '</head>');
+              } else if (data.includes('<body')) {
+                const bodyOpenIdx = data.toLowerCase().indexOf('<body');
+                const bodyTagEnd = data.indexOf('>', bodyOpenIdx);
+                if (bodyTagEnd !== -1) {
+                  data = data.slice(0, bodyTagEnd + 1) + injectionScript + data.slice(bodyTagEnd + 1);
+                } else {
+                  data = injectionScript + data;
+                }
               } else {
-                data = data + injectionScript;
+                data = injectionScript + data;
               }
             }
           }
@@ -221,4 +240,3 @@ export class InjectionMiddleware {
     };
   }
 }
-

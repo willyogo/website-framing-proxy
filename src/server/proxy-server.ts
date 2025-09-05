@@ -55,6 +55,29 @@ export class ProxyServer {
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
     }));
+
+    // Heuristic prefix-rewrite for asset/API requests missing /proxy/{host}
+    // Uses Referer to infer target host and redirects to proxied path
+    this.app.use((req, res, next) => {
+      try {
+        const p = req.path || '';
+        const isCandidate = !p.startsWith('/proxy/') && (
+          p.startsWith('/_next/') || p.startsWith('/static/') || p.startsWith('/assets/') ||
+          p.endsWith('.js') || p.endsWith('.css') || p.endsWith('.json') || p.endsWith('.map')
+        );
+        if (isCandidate) {
+          const referer = req.get('Referer') || '';
+          const m = referer.match(/\/proxy\/([^\/]+)\//);
+          if (m && m[1]) {
+            const host = m[1];
+            const query = req.url.includes('?') ? ('?' + req.url.split('?')[1]) : '';
+            const newPath = `/proxy/${host}${p}${query}`;
+            return res.redirect(302, newPath);
+          }
+        }
+      } catch (_e) {}
+      next();
+    });
     
     // Client-side injection middleware
     this.app.use(this.injectionMiddleware.injectClientProcessor());
@@ -212,7 +235,7 @@ export class ProxyServer {
         'user-agent': req.get('User-Agent') || 'Mozilla/5.0 (compatible; Proxy/1.0)',
         'accept': req.get('Accept') || 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'accept-language': req.get('Accept-Language') || 'en-US,en;q=0.5',
-        'accept-encoding': req.get('Accept-Encoding') || 'gzip, deflate',
+        'accept-encoding': req.get('Accept-Encoding') || 'gzip, deflate, br',
         'connection': 'close',
         'upgrade-insecure-requests': '1'
       }

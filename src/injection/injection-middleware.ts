@@ -46,10 +46,29 @@ export class InjectionMiddleware {
         rewriteUrl: function(url) {
             if (!this.shouldRewrite(url)) return url;
             try {
+                // Handle relative URLs
+                if (url.startsWith('/') && !url.startsWith('//')) {
+                    return \`\${PROXY_BASE_URL}/proxy/\${TARGET_HOST}\${url}\`;
+                }
+                
+                // Handle protocol-relative URLs
+                if (url.startsWith('//')) {
+                    const urlObj = new URL('https:' + url);
+                    return \`\${PROXY_BASE_URL}/proxy/\${urlObj.hostname}\${urlObj.pathname}\${urlObj.search}\${urlObj.hash}\`;
+                }
+                
+                // Handle absolute URLs
                 const urlObj = new URL(url, window.location.href);
                 if (urlObj.pathname.startsWith('/proxy/')) return url;
-                return \`\${PROXY_BASE_URL}/proxy/\${urlObj.hostname}\${urlObj.pathname}\${urlObj.search}\${urlObj.hash}\`;
+                
+                // Only rewrite URLs that point to the target host
+                if (urlObj.hostname === TARGET_HOST || urlObj.hostname === 'www.' + TARGET_HOST) {
+                    return \`\${PROXY_BASE_URL}/proxy/\${urlObj.hostname}\${urlObj.pathname}\${urlObj.search}\${urlObj.hash}\`;
+                }
+                
+                return url;
             } catch (e) {
+                console.warn('Failed to rewrite URL:', url, e);
                 return url;
             }
         }
@@ -136,28 +155,31 @@ export class InjectionMiddleware {
         XMLHttpRequest.prototype.open = function(method, url, ...args) {
             this._originalUrl = url;
             const rewrittenUrl = URLRewriter.rewriteUrl(url);
+            console.log('XHR intercepted:', method, url, '->', rewrittenUrl);
             return originalXHROpen.call(this, method, rewrittenUrl, ...args);
         };
         
-        // Intercept fetch API
-        const originalFetch = window.fetch;
-        window.fetch = function(input, init) {
-            if (typeof input === 'string') {
-                const rewrittenUrl = URLRewriter.rewriteUrl(input);
-                return originalFetch.call(this, rewrittenUrl, init).catch(error => {
-                    console.warn('Fetch request failed:', error);
-                    throw error;
-                });
-            } else if (input instanceof Request) {
-                const rewrittenUrl = URLRewriter.rewriteUrl(input.url);
-                const newRequest = new Request(rewrittenUrl, input);
-                return originalFetch.call(this, newRequest, init).catch(error => {
-                    console.warn('Fetch request failed:', error);
-                    throw error;
-                });
-            }
-            return originalFetch.call(this, input, init);
-        };
+            // Intercept fetch API
+    const originalFetch = window.fetch;
+    window.fetch = function(input, init) {
+        if (typeof input === 'string') {
+            const rewrittenUrl = URLRewriter.rewriteUrl(input);
+            console.log('Fetch intercepted:', input, '->', rewrittenUrl);
+            return originalFetch.call(this, rewrittenUrl, init).catch(error => {
+                console.warn('Fetch request failed:', error);
+                throw error;
+            });
+        } else if (input instanceof Request) {
+            const rewrittenUrl = URLRewriter.rewriteUrl(input.url);
+            console.log('Fetch Request intercepted:', input.url, '->', rewrittenUrl);
+            const newRequest = new Request(rewrittenUrl, input);
+            return originalFetch.call(this, newRequest, init).catch(error => {
+                console.warn('Fetch request failed:', error);
+                throw error;
+            });
+        }
+        return originalFetch.call(this, input, init);
+    };
         
         // Intercept dynamic imports (if supported)
         if (window.import) {

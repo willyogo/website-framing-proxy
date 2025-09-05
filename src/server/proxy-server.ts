@@ -203,7 +203,7 @@ export class ProxyServer {
       port: targetUrl.port || (isHttps ? 443 : 80),
       path: targetUrl.pathname + targetUrl.search,
       method: req.method,
-      timeout: 30000, // 30 second timeout
+      timeout: 60000, // 60 second timeout for slow sites
       headers: {
         ...req.headers,
         host: targetUrl.hostname,
@@ -243,6 +243,15 @@ export class ProxyServer {
           // If it's a relative redirect, make it absolute
           const redirectUrl = location.startsWith('http') ? location : new URL(location, targetUrl.toString()).toString();
           res.redirect(proxyRes.statusCode, `/proxy/${new URL(redirectUrl).hostname}${new URL(redirectUrl).pathname}${new URL(redirectUrl).search}`);
+          return;
+        }
+      }
+      
+      // Handle 404s gracefully - return appropriate content type
+      if (proxyRes.statusCode === 404) {
+        const contentType = proxyRes.headers['content-type'] || '';
+        if (contentType.includes('application/json') || targetPath.match(/\.(json|js)$/i)) {
+          res.status(404).json({ error: 'Resource not found', path: targetPath });
           return;
         }
       }
@@ -414,7 +423,7 @@ export class ProxyServer {
     });
     
     // Handle request timeout
-    proxyReq.setTimeout(30000, () => {
+    proxyReq.setTimeout(60000, () => {
       proxyReq.destroy();
       if (!res.headersSent) {
         res.status(504).json({ error: 'Proxy request timeout' });

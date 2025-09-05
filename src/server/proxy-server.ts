@@ -75,30 +75,6 @@ export class ProxyServer {
     });
   }
 
-  private isSimpleSite(targetUrl: string): boolean {
-    // List of simple static sites that work well with client-side processing
-    const simpleSites = [
-      'example.com',
-      'nouns.world',
-      'myspace.com'
-    ];
-    
-    try {
-      const url = new URL(targetUrl);
-      const hostname = url.hostname.replace(/^www\./, '');
-      
-      // Check if it's a known simple site
-      if (simpleSites.includes(hostname)) {
-        return true;
-      }
-      
-      // For unknown sites, be conservative and assume they're complex
-      // This prevents breaking SSR sites like nouns.com, bigshottoyshop.com
-      return false;
-    } catch (error) {
-      return false;
-    }
-  }
 
   private setupRoutes(): void {
     // Health check endpoint
@@ -325,7 +301,7 @@ export class ProxyServer {
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Date, Server, X-Proxy-Version');
       
       // Debug header to verify we're running the latest code
-      res.setHeader('X-Proxy-Version', 'mime-fix-v1');
+      res.setHeader('X-Proxy-Version', 'all-html-processing-v1');
       
       // Process response cookies
       const setCookieHeaders = proxyRes.headers['set-cookie'];
@@ -338,16 +314,15 @@ export class ProxyServer {
         res.setHeader('Set-Cookie', processedCookies);
       }
       
-      // Simple approach: Stream directly for most sites, only process simple HTML
+      // Apply client-side processing to ALL HTML responses
       const contentType = proxyRes.headers['content-type'] || '';
       const isHtml = contentType.includes('text/html');
-      const isSimpleSite = this.isSimpleSite(targetUrl.toString());
       
-      if (isHtml && isSimpleSite) {
-        // Only process simple static sites with client-side injection
-        this.logger.info(`Processing simple site: ${targetUrl}`);
+      if (isHtml) {
+        // Process ALL HTML sites with client-side injection
+        this.logger.info(`Processing HTML site: ${targetUrl}`);
         
-        // Handle compressed content for simple sites
+        // Handle compressed content
         const contentEncoding = proxyRes.headers['content-encoding'];
         let stream = proxyRes;
         
@@ -392,8 +367,8 @@ export class ProxyServer {
           }
         });
       } else {
-        // For complex sites (SSR, Next.js, etc.), stream directly without processing
-        this.logger.info(`Streaming complex site directly: ${targetUrl}`);
+        // For non-HTML content (JS, CSS, images, etc.), stream directly
+        this.logger.info(`Streaming non-HTML content: ${targetUrl}`);
         proxyRes.pipe(res);
       }
     });

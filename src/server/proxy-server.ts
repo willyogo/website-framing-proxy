@@ -5,7 +5,7 @@ import cookieParser from 'cookie-parser';
 // import { ContentProcessor, RewriteContext } from '../processing/content-processor';
 import { CookieManager } from '../processing/cookie-manager';
 // import { HTMLInjector } from '../injection/html-injector';
-import { InjectionMiddleware } from '../injection/injection-middleware';
+import { InjectionMiddleware, getClientProcessorScript, CLIENT_PROCESSOR_MARKER } from '../injection/injection-middleware';
 // import { SubdomainRouter } from './subdomain-router'; // Will be used in Phase 3
 import { Logger, LogLevel } from '../utils/logger';
 
@@ -393,8 +393,71 @@ export class ProxyServer {
             res.status(500).json({ error: 'Error processing response' });
           }
         });
+      } else if (isHtml && !isSimpleSite) {
+        // SSR/complex sites: Safely inject by handling compression server-side
+        this.logger.info(`Processing SSR/complex site (server-side inject): ${targetUrl}`);
+
+        const contentEncoding = proxyRes.headers['content-encoding'];
+        let stream = proxyRes;
+
+        // We will output decompressed HTML, so drop encoding & length headers
+        if (contentEncoding) {
+          res.removeHeader('content-encoding');
+          res.removeHeader('content-length');
+          res.removeHeader('vary');
+
+          const zlib = require('zlib');
+          if (contentEncoding === 'gzip') {
+            stream = proxyRes.pipe(zlib.createGunzip());
+          } else if (contentEncoding === 'deflate') {
+            stream = proxyRes.pipe(zlib.createInflate());
+          } else if (contentEncoding === 'br') {
+            // brotli support if available
+            if (zlib.createBrotliDecompress) {
+              stream = proxyRes.pipe(zlib.createBrotliDecompress());
+            } else {
+              // Fallback: stream without modification if brotli not supported
+              this.logger.warn('Brotli not supported by runtime; streaming as-is');
+              proxyRes.pipe(res);
+              return;
+            }
+          }
+        }
+
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        stream.on('end', () => {
+          const buffer = Buffer.concat(chunks);
+          // Default to utf-8; could be improved to detect charset
+          let html = buffer.toString('utf8');
+
+          // Avoid double-inject if already present
+          if (!html.includes(CLIENT_PROCESSOR_MARKER)) {
+            const injectionScript = getClientProcessorScript();
+            if (html.includes('</body>')) {
+              html = html.replace('</body>', `${injectionScript}</body>`);
+            } else if (html.includes('</head>')) {
+              html = html.replace('</head>', `${injectionScript}</head>`);
+            } else {
+              html = html + injectionScript;
+            }
+          }
+
+          // Update content-length for modified, decompressed HTML
+          res.setHeader('content-length', Buffer.byteLength(html, 'utf8'));
+          // Mark as injected to help downstream tools if needed
+          res.setHeader('X-Client-Processor-Injected', '1');
+
+          res.send(html);
+        });
+        stream.on('error', (error: any) => {
+          this.logger.error('Error processing SSR HTML stream:', error as Record<string, any>);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error processing SSR HTML' });
+          }
+        });
       } else {
-        // For non-HTML content (JS, CSS, images, etc.), stream directly
+        // For non-HTML content (JS, CSS, images, fonts, etc.), stream directly
         this.logger.info(`Streaming non-HTML content: ${targetUrl}`);
         proxyRes.pipe(res);
       }

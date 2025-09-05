@@ -101,6 +101,217 @@ export class ProxyServer {
     }
   }
 
+  private getClientProcessorScript(): string {
+    return `
+<!-- Website Framing Proxy - Client-Side Processor -->
+<script>
+(function() {
+    'use strict';
+    
+    // Configuration
+    const PROXY_BASE_URL = window.location.origin;
+    const TARGET_HOST = window.location.hostname.replace(/^[^.]+\./, '');
+    
+    // Debug logging
+    console.log('Client processor initialized:', {
+        proxyBaseUrl: PROXY_BASE_URL,
+        targetHost: TARGET_HOST,
+        currentHostname: window.location.hostname,
+        currentPath: window.location.pathname
+    });
+    
+    // URL rewriting utilities
+    const URLRewriter = {
+        shouldRewrite: function(url) {
+            if (!url || typeof url !== 'string') return false;
+            if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:') || url.startsWith('mailto:') || url.startsWith('tel:')) {
+                return false;
+            }
+            // Don't rewrite URLs that are already proxied
+            if (url.includes('/proxy/')) {
+                return false;
+            }
+            return true;
+        },
+        
+        rewriteUrl: function(url) {
+            if (!this.shouldRewrite(url)) return url;
+            try {
+                // Handle relative URLs - these should ALWAYS be rewritten
+                if (url.startsWith('/') && !url.startsWith('//')) {
+                    return \`\${PROXY_BASE_URL}/proxy/\${TARGET_HOST}\${url}\`;
+                }
+                
+                // Handle protocol-relative URLs
+                if (url.startsWith('//')) {
+                    const urlObj = new URL('https:' + url);
+                    return \`\${PROXY_BASE_URL}/proxy/\${urlObj.hostname}\${urlObj.pathname}\${urlObj.search}\${urlObj.hash}\`;
+                }
+                
+                // Handle absolute URLs
+                const urlObj = new URL(url, window.location.href);
+                if (urlObj.pathname.startsWith('/proxy/')) return url;
+                
+                // Rewrite URLs that point to the target host OR are on the same origin
+                if (urlObj.hostname === TARGET_HOST || 
+                    urlObj.hostname === 'www.' + TARGET_HOST ||
+                    urlObj.hostname === window.location.hostname) {
+                    return \`\${PROXY_BASE_URL}/proxy/\${TARGET_HOST}\${urlObj.pathname}\${urlObj.search}\${urlObj.hash}\`;
+                }
+                
+                // Special case: if the URL is going to the proxy server itself, rewrite it
+                if (urlObj.hostname === window.location.hostname && !urlObj.pathname.startsWith('/proxy/')) {
+                    return \`\${PROXY_BASE_URL}/proxy/\${TARGET_HOST}\${urlObj.pathname}\${urlObj.search}\${urlObj.hash}\`;
+                }
+                
+                return url;
+            } catch (e) {
+                console.warn('Failed to rewrite URL:', url, e);
+                return url;
+            }
+        }
+    };
+    
+    // Process DOM elements
+    function processElements() {
+        const urlAttributes = ['src', 'href', 'action', 'data-src', 'data-href'];
+        const selectors = ['img', 'script', 'link', 'a', 'form', 'iframe', 'video', 'audio', 'source', 'track', 'embed', 'object', 'param'];
+        
+        selectors.forEach(selector => {
+            document.querySelectorAll(selector).forEach(element => {
+                urlAttributes.forEach(attr => {
+                    if (element.hasAttribute(attr)) {
+                        const originalUrl = element.getAttribute(attr);
+                        const rewrittenUrl = URLRewriter.rewriteUrl(originalUrl);
+                        if (rewrittenUrl !== originalUrl) {
+                            element.setAttribute(attr, rewrittenUrl);
+                        }
+                    }
+                });
+            });
+        });
+        
+        // Process CSS for URL rewriting
+        processCSS();
+    }
+    
+    // Process CSS for URL rewriting
+    function processCSS() {
+        // Process external stylesheets
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(link => {
+            const href = link.getAttribute('href');
+            if (href) {
+                const rewrittenHref = URLRewriter.rewriteUrl(href);
+                if (rewrittenHref !== href) {
+                    link.setAttribute('href', rewrittenHref);
+                }
+            }
+        });
+        
+        // Process inline styles and style elements
+        document.querySelectorAll('*[style]').forEach(element => {
+            const style = element.getAttribute('style');
+            if (style) {
+                const rewrittenStyle = rewriteCSSUrls(style);
+                if (rewrittenStyle !== style) {
+                    element.setAttribute('style', rewrittenStyle);
+                }
+            }
+        });
+        
+        // Process <style> elements
+        document.querySelectorAll('style').forEach(styleElement => {
+            if (styleElement.textContent) {
+                const rewrittenCSS = rewriteCSSUrls(styleElement.textContent);
+                if (rewrittenCSS !== styleElement.textContent) {
+                    styleElement.textContent = rewrittenCSS;
+                }
+            }
+        });
+    }
+    
+    // Rewrite URLs in CSS content
+    function rewriteCSSUrls(cssContent) {
+        // Match url() functions in CSS
+        return cssContent.replace(/url\\(['"]?([^'")]+)['"]?\\)/g, (match, url) => {
+            const rewrittenUrl = URLRewriter.rewriteUrl(url);
+            return \`url('\${rewrittenUrl}')\`;
+        });
+    }
+    
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', processElements);
+    } else {
+        processElements();
+    }
+    
+    // Intercept AJAX and Fetch API calls
+    function interceptAPIs() {
+        // Intercept fetch API
+        const originalFetch = window.fetch;
+        window.fetch = function(input, init) {
+            if (typeof input === 'string') {
+                const rewrittenUrl = URLRewriter.rewriteUrl(input);
+                console.log('Fetch intercepted:', input, '->', rewrittenUrl);
+                return originalFetch.call(this, rewrittenUrl, init).catch(error => {
+                    console.warn('Fetch request failed:', error);
+                    throw error;
+                });
+            } else if (input instanceof Request) {
+                const rewrittenUrl = URLRewriter.rewriteUrl(input.url);
+                console.log('Fetch Request intercepted:', input.url, '->', rewrittenUrl);
+                const newRequest = new Request(rewrittenUrl, input);
+                return originalFetch.call(this, newRequest, init).catch(error => {
+                    console.warn('Fetch request failed:', error);
+                    throw error;
+                });
+            }
+            return originalFetch.call(this, input, init);
+        };
+        
+        // Also intercept any requests that might be made directly to the proxy server
+        const originalOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...args) {
+            this._originalUrl = url;
+            const rewrittenUrl = URLRewriter.rewriteUrl(url);
+            console.log('XHR intercepted:', method, url, '->', rewrittenUrl);
+            return originalOpen.call(this, method, rewrittenUrl, ...args);
+        };
+        
+        // Intercept dynamic imports (if supported)
+        if (window.import) {
+            const originalImport = window.import;
+            window.import = function(specifier) {
+                const rewrittenSpecifier = URLRewriter.rewriteUrl(specifier);
+                return originalImport.call(this, rewrittenSpecifier);
+            };
+        }
+    }
+    
+    // Initialize API interception
+    interceptAPIs();
+    
+    // Observe DOM changes for dynamic content
+    const observer = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                mutation.addedNodes.forEach(node => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        // Re-run processing for newly added elements
+                        processElements();
+                    }
+                });
+            }
+        });
+    });
+    
+    observer.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+`;
+  }
+
   private setupRoutes(): void {
     // Health check endpoint
     this.app.get('/health', (_req, res) => {
@@ -326,7 +537,7 @@ export class ProxyServer {
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Date, Server, X-Proxy-Version');
       
       // Debug header to verify we're running the latest code
-      res.setHeader('X-Proxy-Version', 'hybrid-with-injection-v1');
+      res.setHeader('X-Proxy-Version', 'manual-injection-v1');
       
       // Process response cookies
       const setCookieHeaders = proxyRes.headers['set-cookie'];
@@ -393,10 +604,10 @@ export class ProxyServer {
           }
         });
       } else if (isHtml && !isSimpleSite) {
-        // Complex sites: Stream directly but ensure script injection happens
-        this.logger.info(`Streaming complex site with script injection: ${targetUrl}`);
+        // Complex sites: Stream directly with manual script injection
+        this.logger.info(`Streaming complex site with manual script injection: ${targetUrl}`);
         
-        // For complex sites, we need to inject the script without decompressing
+        // For complex sites, we need to inject the script manually without using middleware
         // This prevents the ERR_CONTENT_DECODING_FAILED error
         const chunks: Buffer[] = [];
         
@@ -408,8 +619,21 @@ export class ProxyServer {
           const buffer = Buffer.concat(chunks);
           const content = buffer.toString('utf8');
           
-          // Send the content (middleware will handle injection)
-          res.send(content);
+          // Manually inject the client-side processor script
+          const injectionScript = this.getClientProcessorScript();
+          
+          // Inject before closing </body> tag
+          let modifiedContent = content;
+          if (content.includes('</body>')) {
+            modifiedContent = content.replace('</body>', `${injectionScript}</body>`);
+          } else if (content.includes('</head>')) {
+            modifiedContent = content.replace('</head>', `${injectionScript}</head>`);
+          } else {
+            modifiedContent = content + injectionScript;
+          }
+          
+          // Send the modified content directly (bypass middleware)
+          res.end(modifiedContent);
         });
         
         proxyRes.on('error', (error: any) => {

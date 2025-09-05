@@ -2,16 +2,18 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
-import { ContentProcessor, RewriteContext } from '../processing/content-processor';
-import { CookieManager } from '../processing/cookie-manager';
+// Content processing temporarily disabled
+// import { ContentProcessor, RewriteContext } from '../processing/content-processor';
+// import { CookieManager } from '../processing/cookie-manager';
 // import { SubdomainRouter } from './subdomain-router'; // Will be used in Phase 3
 import { Logger, LogLevel } from '../utils/logger';
 
 export class ProxyServer {
   private app: express.Application;
   private port: number;
-  private contentProcessor: ContentProcessor;
-  private cookieManager: CookieManager;
+  // Content processing temporarily disabled
+  // private contentProcessor: ContentProcessor;
+  // private cookieManager: CookieManager;
   // private subdomainRouter: SubdomainRouter; // Will be used in Phase 3
   private logger: Logger;
 
@@ -22,8 +24,9 @@ export class ProxyServer {
     this.logger.setLogLevel(LogLevel.DEBUG);
     
     // Initialize Phase 2 components
-    this.contentProcessor = new ContentProcessor(this.logger);
-    this.cookieManager = new CookieManager(this.logger);
+    // Content processing temporarily disabled
+    // this.contentProcessor = new ContentProcessor(this.logger);
+    // this.cookieManager = new CookieManager(this.logger);
     
     // this.subdomainRouter = new SubdomainRouter(); // Will be used in Phase 3
     
@@ -159,9 +162,9 @@ export class ProxyServer {
     
     console.log('Making direct request to:', targetUrl.toString());
     
-    // Process request cookies
-    const requestCookies = req.get('Cookie') || '';
-    const processedCookies = this.cookieManager.processRequestCookies(requestCookies, targetUrl.hostname);
+    // Cookie processing temporarily disabled
+    // const requestCookies = req.get('Cookie') || '';
+    // const processedCookies = this.cookieManager.processRequestCookies(requestCookies, targetUrl.hostname);
     
     const options: any = {
       hostname: targetUrl.hostname,
@@ -186,9 +189,10 @@ export class ProxyServer {
     }
     
     // Set processed cookies if any
-    if (processedCookies) {
-      options.headers['Cookie'] = processedCookies;
-    }
+    // Cookie processing temporarily disabled
+    // if (processedCookies) {
+    //   options.headers['Cookie'] = processedCookies;
+    // }
     
     // Remove proxy-identifying headers
     delete options.headers['x-forwarded-for'];
@@ -230,16 +234,16 @@ export class ProxyServer {
       // Debug header to verify we're running the latest code
       res.setHeader('X-Proxy-Version', 'streaming-decompression-v1');
       
-      // Process cookies if present
-      const setCookieHeaders = proxyRes.headers['set-cookie'];
-      if (setCookieHeaders) {
-        const processedCookies = this.cookieManager.processResponseCookies(
-          setCookieHeaders,
-          targetUrl.hostname,
-          req.get('host') || 'localhost'
-        );
-        res.setHeader('Set-Cookie', processedCookies);
-      }
+      // Cookie processing temporarily disabled
+      // const setCookieHeaders = proxyRes.headers['set-cookie'];
+      // if (setCookieHeaders) {
+      //   const processedCookies = this.cookieManager.processResponseCookies(
+      //     setCookieHeaders,
+      //     targetUrl.hostname,
+      //     req.get('host') || 'localhost'
+      //   );
+      //   res.setHeader('Set-Cookie', processedCookies);
+      // }
       
       // For now, let's simplify and just pipe the response directly
       // The browser can handle compressed content, and we'll process HTML later
